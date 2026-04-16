@@ -93,6 +93,19 @@ resource "aws_ec2_transit_gateway_vpc_attachment" "west" {
 }
 
 # -----------------------------------------------
+# Firewall endpoint — look up by managed tag
+# -----------------------------------------------
+
+data "aws_vpc_endpoint" "firewall" {
+  vpc_id = data.aws_vpc.hub.id
+
+  filter {
+    name   = "tag:AWSNetworkFirewallManaged"
+    values = ["true"]
+  }
+}
+
+# -----------------------------------------------
 # VPC Route Table Updates
 # Tell each VPC to route cross-VPC traffic via TGW
 # -----------------------------------------------
@@ -118,15 +131,36 @@ data "aws_route_table" "west" {
   }
 }
 
+data "aws_route_table" "hub_firewall" {
+  filter {
+    name   = "tag:Name"
+    values = ["hub-firewall-rt"]
+  }
+}
+
 resource "aws_route" "hub_to_east" {
   route_table_id         = data.aws_route_table.hub.id
   destination_cidr_block = "10.1.0.0/16"
-  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+  vpc_endpoint_id        = data.aws_vpc_endpoint.firewall.id
   depends_on             = [aws_ec2_transit_gateway_vpc_attachment.hub]
 }
 
 resource "aws_route" "hub_to_west" {
   route_table_id         = data.aws_route_table.hub.id
+  destination_cidr_block = "10.2.0.0/16"
+  vpc_endpoint_id        = data.aws_vpc_endpoint.firewall.id
+  depends_on             = [aws_ec2_transit_gateway_vpc_attachment.hub]
+}
+
+resource "aws_route" "firewall_to_east" {
+  route_table_id         = data.aws_route_table.hub_firewall.id
+  destination_cidr_block = "10.1.0.0/16"
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+  depends_on             = [aws_ec2_transit_gateway_vpc_attachment.hub]
+}
+
+resource "aws_route" "firewall_to_west" {
+  route_table_id         = data.aws_route_table.hub_firewall.id
   destination_cidr_block = "10.2.0.0/16"
   transit_gateway_id     = aws_ec2_transit_gateway.main.id
   depends_on             = [aws_ec2_transit_gateway_vpc_attachment.hub]
