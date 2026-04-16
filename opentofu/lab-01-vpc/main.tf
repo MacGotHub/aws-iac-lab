@@ -2,7 +2,7 @@ resource "aws_vpc" "main" {
   cidr_block = "10.0.0.0/16"
 
   tags = {
-    Name = "lab-01-vpc"
+    Name = "hub-vpc"
   }
 }
 
@@ -12,7 +12,7 @@ resource "aws_subnet" "public" {
   availability_zone = "us-east-1a"
 
   tags = {
-    Name = "lab-01-public-subnet"
+    Name = "hub-public-subnet"
   }
 }
 
@@ -20,7 +20,7 @@ resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
 
   tags = {
-    Name = "lab-01-igw"
+    Name = "hub-igw"
   }
 }
 
@@ -33,7 +33,7 @@ resource "aws_route_table" "public" {
   }
 
   tags = {
-    Name = "lab-01-public-rt"
+    Name = "hub-public-rt"
   }
 }
 
