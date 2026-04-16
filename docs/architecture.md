@@ -1,31 +1,79 @@
 # AWS IAC Lab Architecture
 
+## Network Diagram
+
+```mermaid
+graph TB
+    subgraph us-east-1
+        subgraph hub-vpc["Hub VPC (10.0.0.0/16)"]
+            subgraph aza["us-east-1a"]
+                hub_pub_a["hub-public-subnet\n10.0.1.0/24"]
+                hub_fw_a["hub-firewall-subnet\n10.0.2.0/24"]
+                fw_ep_a["Firewall Endpoint A\nvpce-02c894caf8ceb36a0"]
+            end
+            subgraph azb["us-east-1b"]
+                hub_pub_b["hub-public-subnet-b\n10.0.3.0/24"]
+                hub_fw_b["hub-firewall-subnet-b\n10.0.4.0/24"]
+                fw_ep_b["Firewall Endpoint B\nvpce-08b06c4b5245f1efe"]
+            end
+            igw["Internet Gateway"]
+            firewall["AWS Network Firewall\nlab-firewall"]
+        end
+
+        subgraph east-vpc["East VPC (10.1.0.0/16)"]
+            east_pub_a["east-public-subnet\n10.1.1.0/24"]
+            east_pub_b["east-public-subnet-b\n10.1.2.0/24"]
+            east_ec2["EC2: east-instance\n10.1.1.94"]
+        end
+
+        subgraph west-vpc["West VPC (10.2.0.0/16)"]
+            west_pub_a["west-public-subnet\n10.2.1.0/24"]
+            west_pub_b["west-public-subnet-b\n10.2.2.0/24"]
+            west_ec2["EC2: west-instance\n10.2.1.124"]
+        end
+
+        tgw["Transit Gateway\nlab-tgw"]
+    end
+
+    internet["Internet"]
+
+    east_pub_a -- "TGW attachment (AZ-a)" --> tgw
+    east_pub_b -- "TGW attachment (AZ-b)" --> tgw
+    west_pub_a -- "TGW attachment (AZ-a)" --> tgw
+    west_pub_b -- "TGW attachment (AZ-b)" --> tgw
+    tgw -- "TGW attachment" --> hub_pub_a
+    tgw -- "TGW attachment" --> hub_pub_b
+    hub_pub_a -- "route: 10.1/10.2 → fw endpoint" --> fw_ep_a
+    hub_pub_b -- "route: 10.1/10.2 → fw endpoint" --> fw_ep_b
+    fw_ep_a --> firewall
+    fw_ep_b --> firewall
+    hub_fw_a -- "route: 10.1/10.2 → TGW" --> tgw
+    hub_fw_b -- "route: 10.1/10.2 → TGW" --> tgw
+    igw --> internet
+```
+
 ## Overview
 
-This lab builds a hub and spoke network architecture on AWS using OpenTofu.
+Hub and spoke AWS network architecture built with OpenTofu across two AZs.
 All infrastructure is defined as code and state is stored remotely in S3.
 
+**Traffic flow (spoke to spoke):**
 ```
-[east-vpc 10.1.0.0/16] ──TGW attachment──┐
-                                           ├── [Transit Gateway] ── [hub-vpc 10.0.0.0/16 + Firewall]
-[west-vpc 10.2.0.0/16] ──TGW attachment──┘
+east-instance → TGW → hub-public-subnet → Firewall Endpoint → Firewall inspection
+→ hub-firewall-subnet → TGW → west-instance
 ```
 
-Traffic between spokes flows through the hub VPC where it is inspected
-by AWS Network Firewall before being allowed to continue.
+The `ttl=126` (vs 128) on ICMP responses confirms traffic transits two hops
+through the hub, proving the firewall inspection path is active.
 
 ---
 
 ## State Backend (bootstrapped manually via AWS CLI)
 
-Before any OpenTofu code runs, two resources must exist to store and lock state:
-
 | Resource | Name | Purpose |
 |---|---|---|
-| S3 Bucket | `351668480009-opentofu-state` | Stores all `.tfstate` files, one per lab |
+| S3 Bucket | `351668480009-opentofu-state` | Stores all `.tfstate` files |
 | DynamoDB Table | `opentofu-state-lock` | Prevents concurrent `tofu apply` runs |
-
-Each lab stores its state at a unique key inside the bucket:
 
 | Lab | State Key |
 |---|---|
@@ -34,84 +82,86 @@ Each lab stores its state at a unique key inside the bucket:
 | lab-03-vpc | `west-vpc/terraform.tfstate` |
 | lab-04-firewall | `firewall/terraform.tfstate` |
 | lab-05-tgw | `tgw/terraform.tfstate` |
+| lab-06-ec2 | `ec2/terraform.tfstate` |
 
 ---
 
 ## lab-01-vpc — Hub VPC
 
 **Location:** `opentofu/lab-01-vpc/`
-
-**Purpose:** The central hub VPC in the hub and spoke architecture. All spoke
-traffic is routed through this VPC for firewall inspection. Also serves as the
-security-focused VPC.
-
 **CIDR:** `10.0.0.0/16`
+
+**Purpose:** Central hub VPC in the hub and spoke architecture. All spoke
+traffic is routed through this VPC for firewall inspection. Mirrors the
+connectivity account pattern used in enterprise AWS Landing Zone deployments.
 
 ### Resources
 
-| Resource | Name Tag | File | Purpose |
+| Resource | Name Tag | AZ | Purpose |
 |---|---|---|---|
-| `aws_vpc` | `hub-vpc` | `main.tf:1` | The VPC itself |
-| `aws_subnet` | `hub-public-subnet` | `main.tf:9` | Public subnet for general hub resources |
-| `aws_subnet` | `hub-firewall-subnet` | `main.tf:19` | Dedicated subnet for the Network Firewall endpoint |
-| `aws_internet_gateway` | `hub-igw` | `main.tf:30` | Connects the hub VPC to the internet |
-| `aws_route_table` | `hub-public-rt` | `main.tf:38` | Routes public subnet traffic to the IGW |
-| `aws_route_table` | `hub-firewall-rt` | `main.tf:55` | Routes firewall subnet traffic to the IGW |
-| `aws_route_table_association` | — | `main.tf:50` | Associates hub-public-rt with hub-public-subnet |
-| `aws_route_table_association` | — | `main.tf:65` | Associates hub-firewall-rt with hub-firewall-subnet |
+| `aws_vpc` | `hub-vpc` | — | The VPC itself |
+| `aws_subnet` | `hub-public-subnet` | us-east-1a | TGW attachment subnet AZ-a |
+| `aws_subnet` | `hub-firewall-subnet` | us-east-1a | Firewall endpoint subnet AZ-a |
+| `aws_subnet` | `hub-public-subnet-b` | us-east-1b | TGW attachment subnet AZ-b |
+| `aws_subnet` | `hub-firewall-subnet-b` | us-east-1b | Firewall endpoint subnet AZ-b |
+| `aws_internet_gateway` | `hub-igw` | — | Internet connectivity |
+| `aws_route_table` | `hub-public-rt` | us-east-1a | Routes spoke traffic to firewall endpoint A |
+| `aws_route_table` | `hub-public-rt-b` | us-east-1b | Routes spoke traffic to firewall endpoint B |
+| `aws_route_table` | `hub-firewall-rt` | us-east-1a | Routes post-inspection traffic back to TGW |
+| `aws_route_table` | `hub-firewall-rt-b` | us-east-1b | Routes post-inspection traffic back to TGW |
 
 ### Referenced by
-- `lab-04-firewall/main.tf` — looks up `hub-vpc` and `hub-firewall-subnet` via data sources to deploy the firewall
-- `lab-05-tgw/main.tf` — looks up `hub-vpc`, `hub-public-subnet`, and `hub-public-rt` via data sources to attach to Transit Gateway
+- `lab-04-firewall` — deploys firewall into `hub-firewall-subnet` and `hub-firewall-subnet-b`
+- `lab-05-tgw` — attaches hub VPC to TGW using both public subnets
 
 ---
 
 ## lab-02-vpn — East Spoke VPC
 
 **Location:** `opentofu/lab-02-vpn/`
-
-**Purpose:** The east spoke VPC. Connects to the hub via Transit Gateway.
-Represents an application or workload VPC that relies on the hub for
-centralized security inspection.
-
 **CIDR:** `10.1.0.0/16`
+
+**Purpose:** East spoke VPC. Connects to hub via Transit Gateway. Represents
+a workload VPC that relies on the hub for centralized security inspection.
 
 ### Resources
 
-| Resource | Name Tag | File | Purpose |
+| Resource | Name Tag | AZ | Purpose |
 |---|---|---|---|
-| `aws_vpc` | `east-vpc` | `main.tf:1` | The VPC itself |
-| `aws_subnet` | `east-public-subnet` | `main.tf:9` | Public subnet for east workloads |
-| `aws_internet_gateway` | `east-igw` | `main.tf:19` | Connects east VPC to the internet |
-| `aws_route_table` | `east-public-rt` | `main.tf:27` | Routes public subnet traffic |
-| `aws_route_table_association` | — | `main.tf:40` | Associates east-public-rt with east-public-subnet |
+| `aws_vpc` | `east-vpc` | — | The VPC itself |
+| `aws_subnet` | `east-public-subnet` | us-east-1a | Workload subnet AZ-a |
+| `aws_subnet` | `east-public-subnet-b` | us-east-1b | Workload subnet AZ-b |
+| `aws_internet_gateway` | `east-igw` | — | Internet connectivity |
+| `aws_route_table` | `east-public-rt` | us-east-1a | Routes cross-VPC traffic via TGW |
+| `aws_route_table` | `east-public-rt-b` | us-east-1b | Routes cross-VPC traffic via TGW |
 
 ### Referenced by
-- `lab-05-tgw/main.tf` — looks up `east-vpc`, `east-public-subnet`, and `east-public-rt` via data sources to attach to Transit Gateway and add cross-VPC routes
+- `lab-05-tgw` — attaches east VPC to TGW using both public subnets
+- `lab-06-ec2` — deploys test EC2 instance into `east-public-subnet`
 
 ---
 
 ## lab-03-vpc — West Spoke VPC
 
 **Location:** `opentofu/lab-03-vpc/`
-
-**Purpose:** The west spoke VPC. Mirrors the east VPC in structure. Connects
-to the hub via Transit Gateway.
-
 **CIDR:** `10.2.0.0/16`
+
+**Purpose:** West spoke VPC. Mirrors east VPC in structure.
 
 ### Resources
 
-| Resource | Name Tag | File | Purpose |
+| Resource | Name Tag | AZ | Purpose |
 |---|---|---|---|
-| `aws_vpc` | `west-vpc` | `main.tf:1` | The VPC itself |
-| `aws_subnet` | `west-public-subnet` | `main.tf:9` | Public subnet for west workloads |
-| `aws_internet_gateway` | `west-igw` | `main.tf:19` | Connects west VPC to the internet |
-| `aws_route_table` | `west-public-rt` | `main.tf:27` | Routes public subnet traffic |
-| `aws_route_table_association` | — | `main.tf:40` | Associates west-public-rt with west-public-subnet |
+| `aws_vpc` | `west-vpc` | — | The VPC itself |
+| `aws_subnet` | `west-public-subnet` | us-east-1a | Workload subnet AZ-a |
+| `aws_subnet` | `west-public-subnet-b` | us-east-1b | Workload subnet AZ-b |
+| `aws_internet_gateway` | `west-igw` | — | Internet connectivity |
+| `aws_route_table` | `west-public-rt` | us-east-1a | Routes cross-VPC traffic via TGW |
+| `aws_route_table` | `west-public-rt-b` | us-east-1b | Routes cross-VPC traffic via TGW |
 
 ### Referenced by
-- `lab-05-tgw/main.tf` — looks up `west-vpc`, `west-public-subnet`, and `west-public-rt` via data sources to attach to Transit Gateway and add cross-VPC routes
+- `lab-05-tgw` — attaches west VPC to TGW using both public subnets
+- `lab-06-ec2` — deploys test EC2 instance into `west-public-subnet`
 
 ---
 
@@ -119,30 +169,34 @@ to the hub via Transit Gateway.
 
 **Location:** `opentofu/lab-04-firewall/`
 
-**Purpose:** Deploys AWS Network Firewall into the hub VPC's firewall subnet.
-Inspects all traffic flowing through the hub. Uses both stateless rules (fast
-path) and stateful rules (deep packet inspection via Suricata rule syntax).
+**Purpose:** Deploys AWS Network Firewall into both firewall subnets of the
+hub VPC. Inspects all traffic flowing between spoke VPCs. Two endpoints
+provide AZ redundancy mirroring enterprise two-firewall-per-region patterns.
 
 ### Resources
 
 | Resource | Name Tag | File | Purpose |
 |---|---|---|---|
-| `aws_networkfirewall_rule_group` | `lab-stateless-rules` | `main.tf:23` | Stateless rules — forwards all TCP to stateful engine |
-| `aws_networkfirewall_rule_group` | `lab-stateful-rules` | `main.tf:61` | Stateful rules — blocks traffic to known bad domains |
-| `aws_networkfirewall_firewall_policy` | `lab-firewall-policy` | `main.tf:96` | Combines rule groups, sets default actions |
-| `aws_networkfirewall_firewall` | `lab-firewall` | `main.tf:124` | The firewall deployed in hub-firewall-subnet |
+| `aws_networkfirewall_rule_group` | `lab-stateless-rules` | `main.tf:23` | Forwards all TCP to stateful engine |
+| `aws_networkfirewall_rule_group` | `lab-stateful-rules` | `main.tf:68` | Blocks traffic to known bad domains (Suricata rules) |
+| `aws_networkfirewall_firewall_policy` | `lab-firewall-policy` | `main.tf:103` | Combines rule groups, sets default actions |
+| `aws_networkfirewall_firewall` | `lab-firewall` | `main.tf:131` | Firewall deployed across both AZ subnets |
 
-### Data Sources
+### Outputs
 
-| Data Source | Looks Up | Used For |
+| Output | Value | Purpose |
 |---|---|---|
-| `data.aws_vpc.hub` | VPC named `hub-vpc` | Scopes firewall to hub VPC |
-| `data.aws_subnet.firewall` | Subnet named `hub-firewall-subnet` | Deploys firewall endpoint into correct subnet |
+| `firewall_endpoint_az_a` | `vpce-02c894caf8ceb36a0` | Used by lab-05-tgw for AZ-a routes |
+| `firewall_endpoint_az_b` | `vpce-08b06c4b5245f1efe` | Used by lab-05-tgw for AZ-b routes |
+
+**Note:** Endpoint IDs change on every destroy/apply cycle. After rebuilding,
+run `tofu apply` in `lab-04-firewall` to get new IDs, then update the
+`locals` block in `lab-05-tgw/main.tf` before applying TGW.
 
 ### Rule Logic
-- **Stateless:** All TCP traffic is forwarded to the stateful engine (`aws:forward_to_sfe`)
-- **Stateful:** Suricata rules drop TLS (port 443) and HTTP (port 80) traffic to `malware.example.com`
-- Rule order is `STRICT_ORDER` — rules are evaluated top to bottom, first match wins
+- **Stateless:** All TCP forwarded to stateful engine (`aws:forward_to_sfe`)
+- **Stateful:** Suricata rules drop TLS (443) and HTTP (80) to `malware.example.com`
+- Rule order: `STRICT_ORDER` — first match wins
 
 ---
 
@@ -150,70 +204,98 @@ path) and stateful rules (deep packet inspection via Suricata rule syntax).
 
 **Location:** `opentofu/lab-05-tgw/`
 
-**Purpose:** Creates an AWS Transit Gateway and connects all three VPCs to it.
-Updates route tables in each VPC so cross-VPC traffic is routed through the
-TGW. This is the backbone of the hub and spoke architecture.
+**Purpose:** Creates Transit Gateway and connects all three VPCs across both
+AZs. Updates route tables in each VPC for cross-VPC traffic. Hub route tables
+send traffic through the firewall endpoint before forwarding to the TGW.
 
 ### Resources
 
-| Resource | Name Tag | File | Purpose |
-|---|---|---|---|
-| `aws_ec2_transit_gateway` | `lab-tgw` | `main.tf:48` | The Transit Gateway itself |
-| `aws_ec2_transit_gateway_vpc_attachment` | `tgw-attach-hub` | `main.tf:62` | Attaches hub VPC to TGW |
-| `aws_ec2_transit_gateway_vpc_attachment` | `tgw-attach-east` | `main.tf:73` | Attaches east VPC to TGW |
-| `aws_ec2_transit_gateway_vpc_attachment` | `tgw-attach-west` | `main.tf:84` | Attaches west VPC to TGW |
-| `aws_route` | — | `main.tf:106` | Hub route to east (`10.1.0.0/16` via TGW) |
-| `aws_route` | — | `main.tf:114` | Hub route to west (`10.2.0.0/16` via TGW) |
-| `aws_route` | — | `main.tf:122` | East route to hub (`10.0.0.0/16` via TGW) |
-| `aws_route` | — | `main.tf:130` | East route to west (`10.2.0.0/16` via TGW) |
-| `aws_route` | — | `main.tf:138` | West route to hub (`10.0.0.0/16` via TGW) |
-| `aws_route` | — | `main.tf:146` | West route to east (`10.1.0.0/16` via TGW) |
-
-### Data Sources
-
-| Data Source | Looks Up | Used For |
+| Resource | Name Tag | Purpose |
 |---|---|---|
-| `data.aws_vpc.hub` | VPC named `hub-vpc` | TGW attachment |
-| `data.aws_vpc.east` | VPC named `east-vpc` | TGW attachment |
-| `data.aws_vpc.west` | VPC named `west-vpc` | TGW attachment |
-| `data.aws_subnet.hub` | Subnet named `hub-public-subnet` | TGW attachment subnet |
-| `data.aws_subnet.east` | Subnet named `east-public-subnet` | TGW attachment subnet |
-| `data.aws_subnet.west` | Subnet named `west-public-subnet` | TGW attachment subnet |
-| `data.aws_route_table.hub` | Route table named `hub-public-rt` | Adds cross-VPC routes |
-| `data.aws_route_table.east` | Route table named `east-public-rt` | Adds cross-VPC routes |
-| `data.aws_route_table.west` | Route table named `west-public-rt` | Adds cross-VPC routes |
+| `aws_ec2_transit_gateway` | `lab-tgw` | Central router |
+| `aws_ec2_transit_gateway_vpc_attachment` | `tgw-attach-hub` | Hub VPC attachment (AZ-a + AZ-b) |
+| `aws_ec2_transit_gateway_vpc_attachment` | `tgw-attach-east` | East VPC attachment (AZ-a + AZ-b) |
+| `aws_ec2_transit_gateway_vpc_attachment` | `tgw-attach-west` | West VPC attachment (AZ-a + AZ-b) |
 
-### Dependency Notes
-All `aws_route` resources declare `depends_on` pointing to their respective
-TGW attachment. This is required because the route references the TGW as a
-gateway, but the TGW cannot accept routes until the attachment is active.
-OpenTofu cannot infer this dependency automatically from the resource
-references alone.
+### Routes added per VPC
+
+| Route Table | Destination | Next Hop |
+|---|---|---|
+| `hub-public-rt` | `10.1.0.0/16`, `10.2.0.0/16` | Firewall endpoint AZ-a |
+| `hub-public-rt-b` | `10.1.0.0/16`, `10.2.0.0/16` | Firewall endpoint AZ-b |
+| `hub-firewall-rt` | `10.1.0.0/16`, `10.2.0.0/16` | TGW |
+| `hub-firewall-rt-b` | `10.1.0.0/16`, `10.2.0.0/16` | TGW |
+| `east-public-rt` | `10.0.0.0/16`, `10.2.0.0/16` | TGW |
+| `east-public-rt-b` | `10.0.0.0/16`, `10.2.0.0/16` | TGW |
+| `west-public-rt` | `10.0.0.0/16`, `10.1.0.0/16` | TGW |
+| `west-public-rt-b` | `10.0.0.0/16`, `10.1.0.0/16` | TGW |
+
+---
+
+## lab-06-ec2 — Test EC2 Instances
+
+**Location:** `opentofu/lab-06-ec2/`
+
+**Purpose:** Deploys one `t3.micro` EC2 instance in each spoke VPC for
+end-to-end connectivity testing. Connectivity confirmed via ping — `ttl=126`
+confirms traffic traverses two hops through the hub firewall path.
+
+### Resources
+
+| Resource | Name Tag | Purpose |
+|---|---|---|
+| `tls_private_key` | — | Generates RSA-4096 SSH key pair |
+| `aws_key_pair` | `lab-key` | Uploads public key to AWS |
+| `local_sensitive_file` | `lab-key.pem` | Saves private key locally (gitignored) |
+| `aws_security_group` | `east-sg` | Allows SSH (22) and ICMP from 10.0.0.0/8 |
+| `aws_security_group` | `west-sg` | Allows SSH (22) and ICMP from 10.0.0.0/8 |
+| `aws_instance` | `east-instance` | Amazon Linux 2023, east-public-subnet |
+| `aws_instance` | `west-instance` | Amazon Linux 2023, west-public-subnet |
+
+### Outputs
+
+| Output | Purpose |
+|---|---|
+| `east_public_ip` | SSH access to east instance |
+| `west_public_ip` | SSH access to west instance |
+| `east_private_ip` | Used as ping target from west |
+| `west_private_ip` | Used as ping target from east |
+
+### Connectivity test
+```bash
+ssh -i lab-key.pem ec2-user@<east_public_ip>
+ping <west_private_ip>
+```
 
 ---
 
 ## Deployment Order
-
-Labs must be deployed in this order due to dependencies:
 
 ```
 1. lab-01-vpc    (no dependencies)
 2. lab-02-vpn    (no dependencies)
 3. lab-03-vpc    (no dependencies)
 4. lab-04-firewall  (depends on lab-01-vpc)
-5. lab-05-tgw    (depends on lab-01-vpc, lab-02-vpn, lab-03-vpc)
+5. lab-05-tgw    (depends on lab-01-vpc, lab-02-vpn, lab-03-vpc, lab-04-firewall)
+6. lab-06-ec2    (depends on lab-02-vpn, lab-03-vpc)
 ```
 
 ## Teardown Order
 
-Destroy in reverse order to avoid dependency errors:
-
 ```
-1. lab-05-tgw
-2. lab-04-firewall
-3. lab-03-vpc
-4. lab-02-vpn
-5. lab-01-vpc
+1. lab-06-ec2
+2. lab-05-tgw
+3. lab-04-firewall
+4. lab-03-vpc
+5. lab-02-vpn
+6. lab-01-vpc
 ```
 
-Run `tofu destroy` from each lab directory.
+## Important: After Destroy/Redeploy
+
+Firewall endpoint IDs change every time `lab-04-firewall` is destroyed and
+redeployed. After rebuilding:
+
+1. Run `tofu apply` in `lab-04-firewall` — note the new endpoint IDs in outputs
+2. Update the `locals` block in `lab-05-tgw/main.tf` with the new IDs
+3. Run `tofu apply` in `lab-05-tgw`
