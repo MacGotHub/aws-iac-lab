@@ -16,6 +16,13 @@ data "aws_subnet" "firewall" {
   }
 }
 
+data "aws_subnet" "firewall_b" {
+  filter {
+    name   = "tag:Name"
+    values = ["hub-firewall-subnet-b"]
+  }
+}
+
 # -----------------------------------------------
 # Stateless Rule Group
 # Defines basic allow/deny rules processed first
@@ -122,6 +129,10 @@ resource "aws_networkfirewall_firewall" "main" {
 
   subnet_mapping {
     subnet_id = data.aws_subnet.firewall.id
+  }
+
+  subnet_mapping {
+    subnet_id = data.aws_subnet.firewall_b.id
   }
 
   tags = {
