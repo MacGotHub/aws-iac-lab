@@ -125,8 +125,8 @@ resource "aws_ec2_transit_gateway_vpc_attachment" "west" {
 # Firewall endpoint IDs — sourced from lab-04-firewall outputs
 # These are stable per deployment; update if firewall is redeployed
 locals {
-  firewall_endpoint_az_a = "vpce-02c894caf8ceb36a0"
-  firewall_endpoint_az_b = "vpce-08b06c4b5245f1efe"
+  firewall_endpoint_az_a = "vpce-0087ab32e47f384ed"
+  firewall_endpoint_az_b = "vpce-0efcb6b55446d8966"
 }
 
 # -----------------------------------------------
