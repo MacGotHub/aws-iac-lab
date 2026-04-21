@@ -2,7 +2,7 @@
 # vpc_security.tf
 # Security / Inspection VPCs — us-east-1 and us-west-2
 #
-# Architecture mirrors the SGWS connectivity account inspection VPC pattern:
+# Architecture pattern: centralized firewall inspection via GWLB
 #   - TGW attachment subnets per AZ (/28)
 #   - GWLB endpoint subnets per AZ (/28)
 #   - Firewall untrust subnets per AZ (/28)
@@ -26,7 +26,7 @@ resource "aws_vpc" "security" {
   enable_dns_support   = true
 
   tags = merge(local.common_tags, {
-    Name   = "vpc10-${each.key}-security"
+    Name   = "security-vpc-${each.key}"
     Region = each.key
   })
 }
@@ -40,7 +40,7 @@ resource "aws_internet_gateway" "security" {
   vpc_id = aws_vpc.security[each.key].id
 
   tags = merge(local.common_tags, {
-    Name   = "igw-${each.key}-vpc10"
+    Name   = "igw-${each.key}-security-vpc"
     Region = each.key
   })
 }
@@ -68,7 +68,7 @@ resource "aws_subnet" "security_tgw" {
   availability_zone = each.value.az
 
   tags = merge(local.common_tags, {
-    Name   = "sub-vpc10-${each.value.az}-tgw"
+    Name   = "sub-security-vpc-${each.value.az}-tgw"
     Region = each.value.region
     AZ     = each.value.az
     Tier   = "tgw"
@@ -98,7 +98,7 @@ resource "aws_subnet" "security_gwlbe" {
   availability_zone = each.value.az
 
   tags = merge(local.common_tags, {
-    Name   = "sub-vpc10-${each.value.az}-gwlbe"
+    Name   = "sub-security-vpc-${each.value.az}-gwlbe"
     Region = each.value.region
     AZ     = each.value.az
     Tier   = "gwlbe"
@@ -129,7 +129,7 @@ resource "aws_subnet" "security_untrust" {
   availability_zone = each.value.az
 
   tags = merge(local.common_tags, {
-    Name   = "sub-vpc10-${each.value.az}-palo-untrust"
+    Name   = "sub-security-vpc-${each.value.az}-untrust"
     Region = each.value.region
     AZ     = each.value.az
     Tier   = "untrust"
@@ -139,7 +139,7 @@ resource "aws_subnet" "security_untrust" {
 # -----------------------------------------------------------------------------
 # Firewall Trust/Mgmt Subnets — one per AZ per region (/27)
 # Firewall trust and management interfaces sit here
-# Local-only routing — no default route (matches SGWS main RT pattern)
+# Local-only routing — no default route (intentional, trust/mgmt isolation)
 # -----------------------------------------------------------------------------
 resource "aws_subnet" "security_trust_mgmt" {
   for_each = {
@@ -160,7 +160,7 @@ resource "aws_subnet" "security_trust_mgmt" {
   availability_zone = each.value.az
 
   tags = merge(local.common_tags, {
-    Name   = "sub-vpc10-${each.value.az}-trust-mgmt"
+    Name   = "sub-security-vpc-${each.value.az}-trust-mgmt"
     Region = each.value.region
     AZ     = each.value.az
     Tier   = "trust-mgmt"
@@ -192,7 +192,7 @@ resource "aws_route_table" "security_tgw" {
   vpc_id = aws_vpc.security[each.value.region].id
 
   tags = merge(local.common_tags, {
-    Name   = "rt-${each.value.az}-vpc10-security-tgw"
+    Name   = "rt-${each.value.az}-security-vpc-tgw"
     Region = each.value.region
     AZ     = each.value.az
     Tier   = "tgw"
@@ -228,7 +228,7 @@ resource "aws_route_table" "security_gwlbe" {
   vpc_id = aws_vpc.security[each.key].id
 
   tags = merge(local.common_tags, {
-    Name   = "rt-${each.key}-vpc10-security-gwlbe"
+    Name   = "rt-${each.key}-security-vpc-gwlbe"
     Region = each.key
     Tier   = "gwlbe"
   })
@@ -268,7 +268,7 @@ resource "aws_route_table" "security_untrust" {
   }
 
   tags = merge(local.common_tags, {
-    Name   = "rt-${each.key}-vpc10-security-untrust"
+    Name   = "rt-${each.key}-security-vpc-untrust"
     Region = each.key
     Tier   = "untrust"
   })
@@ -295,7 +295,7 @@ resource "aws_route_table_association" "security_untrust" {
 # -----------------------------------------------------------------------------
 # Main Route Tables — one shared per region (local only)
 # Trust/mgmt subnets are isolated — no default route, no TGW route
-# Matches SGWS pattern where trust/mgmt interfaces have no direct routing
+# Local-only routing is intentional — trust/mgmt interfaces have no direct routing
 # -----------------------------------------------------------------------------
 resource "aws_route_table" "security_main" {
   for_each = local.security_vpcs
@@ -306,7 +306,7 @@ resource "aws_route_table" "security_main" {
   # Trust/mgmt subnet traffic stays within the VPC
 
   tags = merge(local.common_tags, {
-    Name   = "rt-${each.key}-vpc10-security-main"
+    Name   = "rt-${each.key}-security-vpc-main"
     Region = each.key
     Tier   = "main"
   })

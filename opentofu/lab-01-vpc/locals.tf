@@ -28,8 +28,7 @@ locals {
       azs  = ["us-east-1b", "us-east-1c", "us-east-1d"]
 
       # Subnet CIDRs carved from 10.0.16.0/22
-      # /28 subnets: cidrsubnet("10.0.16.0/22", 4, n) gives /26 blocks — use 6 for /28
-      # Using explicit CIDRs here for readability and to mirror SGWS naming clarity
+      # Using explicit CIDRs here for readability and easy console cross-referencing
       subnet_cidrs = {
         "us-east-1b" = {
           tgw        = "10.0.16.0/28"
