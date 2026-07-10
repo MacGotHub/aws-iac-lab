@@ -1,7 +1,7 @@
 # DESIGN.md — aws-iac-lab Architecture Design Document
 
 **Author:** Derek McWilliams
-**Last Updated:** April 2026
+**Last Updated:** July 2026
 **Status:** In Progress
 
 ---
@@ -11,6 +11,14 @@
 This document describes the architecture and design decisions behind the
 aws-iac-lab project. It serves as a reference for understanding why things
 are built the way they are, and as a guide for extending the lab in the future.
+
+**Scope:** this document covers the **v2 rebuild** happening in
+`opentofu/lab-01-vpc/` (GWLB-based centralized inspection). The original v1
+architecture (AWS Network Firewall in the hub VPC) still used by labs 02-10
+is documented separately in `docs/architecture.md` at the repo root — its
+lab-01 section is stale and superseded by this document. For the literal
+`tofu init/plan/apply` commands, credentials, and state-backend prerequisites,
+see `docs/runbook.md`.
 
 ---
 
@@ -323,7 +331,12 @@ CIDRs are defined explicitly in `locals.tf` rather than computed with
 
 ## Build Order and Dependencies
 
-The dependency chain determines the order files must be applied:
+The dependency chain determines the order files must be **written**. OpenTofu
+always plans/applies the whole directory, not individual files — so the
+workflow is: write the next file, then `tofu validate` / `tofu plan` /
+`tofu apply` on the directory, then move to the next file. The exact command
+loop (including credential and backend prerequisites, and a warning about the
+shared v1 state key) is in `docs/runbook.md`, section 3.
 
 ```
 vpc_security.tf   (done)
@@ -352,13 +365,101 @@ outputs.tf        ← collects everything
 |---|---|---|
 | `locals.tf` | Done | AZ lists, CIDRs, subnet definitions — the brain |
 | `variables.tf` | Done | Environment, region, owner inputs |
-| `vpc_security.tf` | Done | Security VPCs, subnets, route tables |
+| `vpc_security.tf` + `modules/security-vpc/` | Done | Security VPCs, subnets, route tables — one module call per region (provider can't vary per-key in a single for_each) |
 | `gwlb.tf` | TODO | GWLB per region, target groups, GWLBe per AZ |
 | `tgw.tf` | TODO | Two TGWs, peering, VPC attachments, route tables |
 | `vpc_spoke.tf` | TODO | Spoke VPCs (east + west), TGW attachments |
-| `vpc_hub.tf` | TODO | Hub VPC refactored to for_each pattern |
+| `vpc_hub.tf` | Done | Hub VPC refactored to for_each pattern, CIDR corrected to 10.0.0.0/20 |
 | `vpc_onprem.tf` | TODO | On-prem simulation VPCs, StrongSwan EC2, VPN |
 | `outputs.tf` | TODO | VPC IDs, subnet IDs, GWLB ARNs, TGW ID |
+
+Note: the TODO files do not exist yet in the directory — do not go looking
+for stubs. Each one is created from scratch when its turn in the build order
+comes.
+
+---
+
+## Definition of Done — per remaining file
+
+Concrete verification checklists so "done" is not a judgment call. Every file
+must also pass the generic gates: `tofu validate` succeeds; `tofu plan` shows
+only the expected `+ create` lines (no surprise destroys/replacements of
+already-applied resources); a second `tofu plan` after `tofu apply` reports
+"No changes"; all resources use `for_each` driven by `locals.tf`, carry
+`merge(local.common_tags, ...)` tags, and follow the naming conventions in
+`CLAUDE.md`.
+
+### gwlb.tf — done when:
+
+- [ ] Plan shows, **per region** (x2, using the default and `aws.west`
+      providers): 1 `aws_lb` (type `gateway`) spanning that region's untrust
+      subnets, 1 `aws_lb_target_group`, 1 `aws_lb_listener`,
+      1 `aws_vpc_endpoint_service`, and 1 `aws_vpc_endpoint` (type
+      `GatewayLoadBalancer`) **per AZ** in the gwlbe subnets — 3 per region,
+      matching the AZ lists in `locals.tf` (us-east-1b/c/d, us-west-2b/c/d).
+- [ ] Each per-AZ TGW route table (`module.security_vpc_east/west.tgw_route_table_ids`)
+      gets its `0.0.0.0/0` route pointing at the GWLB endpoint **in the same
+      AZ** (AZ affinity — key both maps by AZ so this is structural, not
+      positional).
+- [ ] GWLB endpoint IDs are exposed keyed by AZ (module output or local) so
+      `tgw.tf` and future files can consume them without hardcoding `vpce-*` IDs.
+- [ ] Expected imperfection: target groups have **no registered targets**
+      (firewall instance choice is still an open decision — see "Firewall
+      instances" above). Unhealthy/empty target groups are correct at this stage.
+
+### tgw.tf — done when:
+
+- [ ] Plan shows 2 `aws_ec2_transit_gateway` (one per region) plus a peering
+      attachment and its accepter.
+- [ ] Each security VPC has a TGW VPC attachment using that region's
+      `module.security_vpc_*.tgw_subnet_ids`, with
+      `appliance_mode_support = "enable"` (required for stateful inspection —
+      see "TGW appliance mode" above).
+- [ ] Each TGW has the two route tables from "Transit Gateway Design":
+      `rt-tgw-spokes` (default route → security VPC attachment) and
+      `rt-tgw-security` (spoke CIDRs → spoke attachments; remote-region CIDRs
+      → peering attachment, added statically).
+- [ ] The shared GWLBE route table in each region
+      (`module.security_vpc_*.gwlbe_route_table_id`) gets its three RFC-1918
+      return routes (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) → that
+      region's TGW.
+- [ ] TGW IDs and attachment IDs are exposed for `vpc_spoke.tf` /
+      `vpc_onprem.tf` to consume.
+
+### vpc_spoke.tf — done when:
+
+- [ ] Plan shows spoke-vpc-east (10.1.0.0/16, us-east-1) and spoke-vpc-west
+      (10.2.0.0/16, us-west-2) with TGW attachments, driven from `locals.tf`.
+      (Subnet layout inside the spokes is not yet specified in this document —
+      decide and record it here before/while writing the file.)
+- [ ] Spoke attachments are associated with `rt-tgw-spokes` (NOT
+      `rt-tgw-security`) so all spoke traffic is forced through inspection.
+- [ ] Spoke VPC route tables send non-local traffic to the TGW.
+- [ ] Note: end-to-end pings will NOT work until firewall instances (or a
+      stand-in) exist — with empty GWLB target groups, traffic blackholes at
+      the GWLB. Plan-level correctness is the bar here.
+
+### vpc_onprem.tf — done when:
+
+- [ ] Plan shows both on-prem VPCs (on-prem-east 10.10.0.0/16, on-prem-west
+      10.20.0.0/16), each with a t3.micro StrongSwan EC2 instance,
+      an `aws_customer_gateway` pointing at the instance's public IP, a VPN
+      attachment on the regional TGW, and static routes (no BGP).
+- [ ] VPN attachments are associated with `rt-tgw-spokes` so VPN traffic is
+      inspected like spoke traffic.
+- [ ] Note: the IPsec tunnel only comes UP after StrongSwan is configured on
+      the instance. That day-1 configuration (planned for Ansible) is not yet
+      designed — tunnel-UP is out of scope for this file's definition of done.
+
+### outputs.tf — done when:
+
+- [ ] `tofu output` after apply shows: hub/security/spoke VPC IDs, subnet ID
+      maps (keyed by AZ), GWLB ARNs and endpoint IDs, and TGW IDs, for both
+      regions.
+- [ ] No file in this directory (and no future consumer) needs a hardcoded
+      AWS resource ID — everything is reachable via outputs or resource
+      references. (The module already exposes the per-region pieces via
+      `module.security_vpc_east/west.*` — this file surfaces them at root level.)
 
 ---
 

@@ -1,4 +1,23 @@
-# AWS IAC Lab Architecture
+# AWS IAC Lab Architecture (v1 — original design)
+
+> **STATUS NOTE (2026-07): this document describes the ORIGINAL (v1)
+> architecture — AWS Network Firewall deployed directly in the hub VPC.**
+>
+> - Labs **02 through 10** still follow this document. It remains the
+>   reference for them.
+> - The **lab-01-vpc section below is STALE.** The `opentofu/lab-01-vpc/`
+>   directory has been rebuilt in place toward a different (v2) design:
+>   hub VPC re-CIDRed to `10.0.0.0/20` plus dedicated GWLB-based security
+>   VPCs in both regions. For lab-01-vpc as it exists today, read
+>   [`../opentofu/lab-01-vpc/DESIGN.md`](../opentofu/lab-01-vpc/DESIGN.md)
+>   and [`../opentofu/lab-01-vpc/CLAUDE.md`](../opentofu/lab-01-vpc/CLAUDE.md)
+>   instead. The v2 rebuild reuses the same state key
+>   (`hub-vpc/terraform.tfstate`) — see [`runbook.md`](runbook.md) section 3
+>   before applying anything in lab-01-vpc.
+> - The hardcoded resource IDs in this document (`vpce-*`, `tgw-*`) are
+>   snapshots from a past deployment; they change on every destroy/apply.
+> - This document does not say what is currently deployed. Check with
+>   `tofu state list` per lab or the AWS console.
 
 ## Network Diagram
 
@@ -117,6 +136,12 @@ The `ttl=125` on cross-region ICMP confirms three hops (e1 firewall + peering + 
 ---
 
 ## lab-01-vpc — Hub VPC (us-east-1)
+
+> **STALE — historical reference only.** This section describes the v1 code
+> that used to live in `opentofu/lab-01-vpc/`. That directory has since been
+> rebuilt to the v2 GWLB inspection design (hub CIDR is now `10.0.0.0/20`,
+> not `10.0.0.0/16`). See `opentofu/lab-01-vpc/DESIGN.md` for the current
+> design. Kept here because labs 04 and 05 were built against this v1 hub.
 
 **Location:** `opentofu/lab-01-vpc/`
 **CIDR:** `10.0.0.0/16`
