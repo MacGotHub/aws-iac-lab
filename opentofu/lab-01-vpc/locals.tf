@@ -99,48 +99,6 @@ locals {
   }
 
   # ---------------------------------------------------------------------------
-  # Flattened subnet maps — used by for_each in vpc_security.tf
-  # Produces a flat map keyed by "<region>-<az>-<subnet_type>"
-  # e.g. "us-east-1-us-east-1b-tgw"
-  # ---------------------------------------------------------------------------
-
-  # All TGW subnets across both regions
-  security_tgw_subnets = {
-    for region, vpc in local.security_vpcs :
-    region => {
-      for az, cidrs in vpc.subnet_cidrs :
-      az => cidrs.tgw
-    }
-  }
-
-  # All GWLBE subnets across both regions
-  security_gwlbe_subnets = {
-    for region, vpc in local.security_vpcs :
-    region => {
-      for az, cidrs in vpc.subnet_cidrs :
-      az => cidrs.gwlbe
-    }
-  }
-
-  # All untrust subnets across both regions
-  security_untrust_subnets = {
-    for region, vpc in local.security_vpcs :
-    region => {
-      for az, cidrs in vpc.subnet_cidrs :
-      az => cidrs.untrust
-    }
-  }
-
-  # All trust/mgmt subnets across both regions
-  security_trust_mgmt_subnets = {
-    for region, vpc in local.security_vpcs :
-    region => {
-      for az, cidrs in vpc.subnet_cidrs :
-      az => cidrs.trust_mgmt
-    }
-  }
-
-  # ---------------------------------------------------------------------------
   # Common tags applied to all resources
   # ---------------------------------------------------------------------------
   common_tags = {
