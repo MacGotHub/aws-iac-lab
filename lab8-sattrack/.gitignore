@@ -1,0 +1,8 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# OpenTofu Lambda build artifacts (zipped from lambdas/ at plan/apply time)
+opentofu/build/
