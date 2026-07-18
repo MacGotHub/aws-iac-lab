@@ -1,3 +1,6 @@
 pytest
 boto3
 moto[s3,dynamodb]
+# Unpinned on purpose: the layer pins target Lambda's python3.12; the local
+# interpreter (3.14) needs whatever wheel set supports it.
+skyfield
