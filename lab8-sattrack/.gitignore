@@ -6,3 +6,6 @@ __pycache__/
 
 # OpenTofu Lambda build artifacts (zipped from lambdas/ at plan/apply time)
 opentofu/build/
+
+# Lambda layer contents (rebuilt by layers/*/build.sh; only the recipe is committed)
+layers/*/python/

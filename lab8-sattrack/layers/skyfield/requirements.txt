@@ -1,0 +1,7 @@
+# Pinned for reproducible layer builds; skyfield is the only direct
+# dependency, the rest are its transitive deps locked to known-good versions.
+skyfield==1.54
+sgp4==2.27
+numpy==2.2.6
+jplephem==2.24
+certifi==2026.6.17
