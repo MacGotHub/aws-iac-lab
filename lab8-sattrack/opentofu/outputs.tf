@@ -9,3 +9,7 @@ output "tle_archive_bucket" {
 output "tle_fetcher_function_name" {
   value = aws_lambda_function.tle_fetcher.function_name
 }
+
+output "api_endpoint" {
+  value = aws_apigatewayv2_api.sattrack.api_endpoint
+}
